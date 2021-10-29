@@ -47,7 +47,9 @@ class MiniMax(Algorithm):
                 data={"moves": moves, "blocks": blocks, "move": (x, y, tile), "depth": depth}
             )
 
-            if next_score == 10 ** 10:
+            if depth == self.max_depth and abs(next_score) == 10 ** 10:
+                return (x, y)
+            elif next_score == 10 ** 10:
                 return next_score + depth
             elif next_score == -(10 ** 10):
                 return next_score - depth
@@ -149,7 +151,7 @@ class Heuristic1(Heuristic):
                 else:
                     empty_count += 1
 
-            if line_count == line_up_size:
+            if line_count + min(1, empty_count) >= line_up_size:
                 player_scores[tile] = 10 ** 10
                 break
             else:
