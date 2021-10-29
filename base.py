@@ -9,8 +9,8 @@ class MiniMax(Algorithm):
     def __get_tile_positions(self, tiles: Set[Tuple[int, int, Tile]]) -> Set[Tuple[int, int]]:
         return set([(x, y) for x, y, _ in tiles])
 
-    def __get_moves(self, tiles: Set[Tuple[int, int, Tile]], blocks: Set[Tuple[int, int]]) -> Set[Move]:
-        tile_positions = self.__get_tile_positions(tiles)
+    def __get_moves(self, moves: List[Tuple[int, int, Tile]], blocks: Set[Tuple[int, int]]) -> Set[Move]:
+        tile_positions = self.__get_tile_positions(moves)
         invalid = blocks | tile_positions
         moves = set()
 
@@ -27,56 +27,58 @@ class MiniMax(Algorithm):
 
     def __get_tile(self, is_self: bool) -> Tile:
         if is_self:
-            return Tile.WHITE if self.player_index == 0 else Tile.BLACK
+            return self.tile
         else:
-            return Tile.WHITE if self.player_index == 1 else Tile.BLACK
+            return Tile.WHITE if self.tile == Tile.BLACK else Tile.BLACK
 
-    def __dp(self, depth: int, tiles: Set[Tuple[int, int, Tile]], blocks: Set[Tuple[int, int]], is_self: bool=True) -> Union[Move, int]:
-        if depth == 0: 
+    def __dp(self, depth: int, moves: List[Tuple[int, int, Tile]], blocks: Set[Tuple[int, int]], is_self: bool=True) -> Union[Move, int]:
+        if depth == 0:
             return 0
 
         tile = self.__get_tile(is_self)
-        moves = list(self.__get_moves(
-            tiles=tiles,
+        next_moves = list(self.__get_moves(
+            moves=moves,
             blocks=blocks
         ))
 
         scores = []
-        for (x, y) in moves:
+        for (x, y) in next_moves:
             next_score = self.get_score(
-                data={"tiles": tiles, "blocks": blocks, "move": (x, y, tile)}
+                data={"moves": moves, "blocks": blocks, "move": (x, y, tile), "depth": depth}
             )
 
-            if next_score == float('inf') or next_score == float('-inf'):
-                return next_score
+            if next_score == 10 ** 10:
+                return next_score + depth
+            elif next_score == -(10 ** 10):
+                return next_score - depth
 
-            nt = tiles.copy()
-            nt.add((x, y, tile))
+            nt = moves.copy()
+            nt.append((x, y, tile))
 
             scores.append(next_score + self.__dp(
                 depth=depth - 1, 
-                tiles=nt,
+                moves=nt,
                 blocks=blocks,
                 is_self=not is_self
             ))
 
         if depth == self.max_depth:
             if len(scores) == 0:
-                invalid = blocks | self.__get_tile_positions(tiles)
-                moves = set()
+                invalid = blocks | self.__get_tile_positions(moves)
+                next_moves = set()
 
                 for y in range(self.board_size):
                     for x in range(self.board_size):
-                        moves.add((x, y))
+                        next_moves.add((x, y))
 
-                moves = moves - invalid
+                next_moves = next_moves - invalid
 
-                return random.choice(list(moves))
+                return random.choice(list(next_moves))
 
             max_score = max(scores)
             max_index = scores.index(max_score)
 
-            return moves[max_index]
+            return next_moves[max_index]
         elif len(scores) == 0:
             return 0
         elif is_self:
@@ -87,8 +89,8 @@ class MiniMax(Algorithm):
     def next_move(self, packet: PlayPacket) -> Move:
         move = self.__dp(
             depth=self.max_depth, 
-            tiles=packet.tiles,
-            blocks=packet.blocks,
+            moves=packet.moves,
+            blocks=set(packet.blocks),
             is_self=True
         )
 
@@ -106,7 +108,7 @@ class Heuristic1(Heuristic):
         return Tile.BLACK if tile == Tile.WHITE else Tile.WHITE
 
     def get_score(self, data: any) -> float:
-        tiles: Set[Tuple[int, int, Tile]] = data["tiles"]
+        tiles: List[Tuple[int, int, Tile]] = data["moves"]
         blocks: Set[Tuple[int, int]] = data["blocks"]
 
         tile_positions = {
@@ -124,13 +126,13 @@ class Heuristic1(Heuristic):
 
         x, y, tile = data["move"]
         for direction in [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]:
-            line_up_size = self._parameters.line_up_size
+            line_up_size = self.line_up_size
 
             line = make_line(
                 point=(x, y), 
                 direction=direction, 
                 length=line_up_size,
-                board_size=self._parameters.board_size
+                board_size=self.board_size
             )
 
             if not line: continue
@@ -148,13 +150,13 @@ class Heuristic1(Heuristic):
                     empty_count += 1
 
             if line_count == line_up_size:
-                player_scores[tile] = float('inf')
+                player_scores[tile] = 10 ** 10
                 break
             else:
                 player_scores[tile] += (line_count + empty_count) ** (11 - line_up_size)
 
-        my_tile = Tile.WHITE if self.player_index == 0 else Tile.BLACK
-        other_tile = Tile.WHITE if my_tile == Tile.BLACK else Tile.BLACK
+        my_tile = self.tile
+        other_tile = self.__other_tile(my_tile)
         score = player_scores[my_tile] - player_scores[other_tile]
 
         return score
