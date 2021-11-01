@@ -3,6 +3,7 @@ from ..common import PlayPacket, MovePacket, MoveStatistics, Tile, make_line
 from typing import List, Tuple, Set, Union
 import random
 import itertools
+import time
 
 # TODO: Implement these classes.
 
@@ -59,13 +60,21 @@ class MiniMax(Algorithm):
         return self_score - max_other_score
 
     def __search(self, depth: int, moves: List[Tuple[int, int, Tile]], tile: Tile) -> Tuple[Tuple[int, int], List[float]]:
-        if depth == 0:
-            return (None, self.get_score({
+        start_time = time.time()
+        if depth == 0 or start_time > self.start_time + self.max_time:
+            score = self.get_score({
                 "moves": moves,
                 "depth": self.max_depth - depth,
                 "order": self.order,
                 "blocks": self.blocks
-            }))
+            })
+            end_time = time.time()
+
+            self.node_times.append(end_time - start_time)
+            # TODO: Assert that -1 is not hit.
+            self.depth_counts[self.max_depth - depth - 1] += 1
+
+            return (None, score)
 
         max_nexts = []
         for x, y in self.__get_moves(moves=moves):
@@ -91,11 +100,14 @@ class MiniMax(Algorithm):
         return (max_move, max_score)
 
     def next_move(self, packet: PlayPacket) -> MovePacket:
+        self.start_time = time.time()
         self.blocks = set(packet.blocks)
         self.order = packet.order
+        self.node_times = []
+        self.depth_counts = [0] * self.max_depth
 
         move, score = self.__search(
-            depth=self.max_depth, 
+            depth=self.max_depth,
             moves=packet.moves,
             tile=self.tile
         )
@@ -103,7 +115,12 @@ class MiniMax(Algorithm):
         print("Play:", move, "Score:", score)
 
         return MovePacket(
-            move=(move[0], move[1])
+            move=(move[0], move[1]),
+            statistics=MoveStatistics(
+                node_times=self.node_times,
+                depth_counts=self.depth_counts,
+                average_recursive_depth=0
+            )
         )
 
 class AlphaBeta(Algorithm):
