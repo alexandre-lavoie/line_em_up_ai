@@ -228,4 +228,27 @@ class Heuristic2(Heuristic):
 
 class Heuristic1(Heuristic):
     def get_score(self, data: any) -> float:
-        return [random.random() for _ in range(len(data["order"]))]
+        moves: List[Tuple[int, int, Tile]] = data["moves"]
+        blocks: Set[Tuple[int, int]] = data["blocks"]
+        order: List[Tile] = data["order"]
+
+        closed = set([(x, y) for x, y, _ in moves])
+
+        score = [0] * len(order)
+        for x, y, tile in moves:
+            tile_index = order.index(tile)
+
+            neighbors = 0
+            invalids = 0
+
+            for (dx, dy) in [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]:
+                ox, oy = x + dx, y + dy
+
+                if (ox, oy, tile) in moves:
+                    neighbors += 1
+                elif (ox, oy) in closed or (ox, oy) in blocks:
+                    invalids += 1
+
+            score[tile_index] += (4 - neighbors) * neighbors - invalids + (8 - neighbors - invalids) * 2
+
+        return score
