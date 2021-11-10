@@ -1,18 +1,24 @@
+from abc import abstractmethod
 from ..client.algorithm import Algorithm, Heuristic
 from ..common import PlayPacket, MovePacket, MoveStatistics, Tile, make_line
 from typing import List, Tuple, Set, Union
 import random
 import itertools
 import time
+from abc import ABC, abstractmethod
 
 # TODO: Implement these classes.
 
-class MiniMax(Algorithm):
-    def __get_tile_positions(self, tiles: Set[Tuple[int, int, Tile]]) -> Set[Tuple[int, int]]:
+class ClientAlgorithm(Algorithm, ABC):
+    blocks: any
+    board_size: int
+    order: any
+
+    def _get_tile_positions(self, tiles: Set[Tuple[int, int, Tile]]) -> Set[Tuple[int, int]]:
         return set([(x, y) for x, y, _ in tiles])
 
-    def __get_moves(self, moves: List[Tuple[int, int, Tile]]) -> Set[Tuple[int, int]]:
-        tile_positions = self.__get_tile_positions(moves)
+    def _get_moves(self, moves: List[Tuple[int, int, Tile]]) -> Set[Tuple[int, int]]:
+        tile_positions = self._get_tile_positions(moves)
         invalid = tile_positions | self.blocks
         moves = set()
 
@@ -27,39 +33,40 @@ class MiniMax(Algorithm):
 
         return moves
 
-    def __next_tile(self, tile: Tile) -> Tile:
+    def _next_tile(self, tile: Tile) -> Tile:
         return self.order[(self.order.index(tile) + 1) % len(self.order)]
 
-    def __random_move(self, moves: List[Tuple[int, int, Tile]]) -> Tuple[int, int]:
-        invalid = self.__get_tile_positions(tiles=moves) | self.blocks
+    def _random_move(self, moves: List[Tuple[int, int, Tile]]) -> Tuple[int, int]:
+        invalid = self._get_tile_positions(tiles=moves) | self.blocks
         empty = set([(x, y) for x, y in itertools.product(range(self.board_size), range(self.board_size))]) - invalid
-        move = random.choice(list(empty))
 
-        return move
+        if len(empty) == 0:
+            return None
+        else:
+            return random.choice(list(empty))
 
-    def __print_board(self, moves: List[Tuple[int, int, Tile]], depth: int):
-        board = [["-" for _ in range(self.board_size)] for __ in range(self.board_size)]
-
-        for x, y in self.blocks:
-            board[y][x] = "X"
-
-        for x, y, tile in moves:
-            board[y][x] = tile.value
-
-        for d, (x, y, tile) in enumerate(reversed(moves[-depth:])):
-            board[y][x] = f"({tile.value}-{d})"
-
-        for row in board:
-            print('\t'.join(str(tile) for tile in row))
-
-    def __get_tile_score(self, score: List[float], index: int) -> float:
+    def _get_tile_score(self, score: List[float], index: int) -> float:
         score_copy = score.copy()
         self_score = score_copy.pop(index)
         max_other_score = max(score_copy)
 
         return self_score - max_other_score
 
-    def __search(self, depth: int, moves: List[Tuple[int, int, Tile]], tile: Tile) -> Tuple[Tuple[int, int], List[float]]:
+    @abstractmethod
+    def run(self, packet: PlayPacket) -> MovePacket:
+        pass
+
+    def next_move(self, packet: PlayPacket) -> MovePacket:
+        self.start_time = time.time()
+        self.blocks = set(packet.blocks)
+        self.order = packet.order
+        self.node_times = []
+        self.depth_counts = [0] * self.max_depth
+
+        return self.run(packet)
+
+class MiniMax(ClientAlgorithm):
+    def search(self, depth: int, moves: List[Tuple[int, int, Tile]], tile: Tile) -> Tuple[Tuple[int, int], List[float]]:
         start_time = time.time()
         if depth == 0 or start_time > self.start_time + self.max_time:
             score = self.get_score({
@@ -71,42 +78,31 @@ class MiniMax(Algorithm):
             end_time = time.time()
 
             self.node_times.append(end_time - start_time)
-            # TODO: Assert that -1 is not hit.
             self.depth_counts[self.max_depth - depth - 1] += 1
 
             return (None, score)
 
         max_nexts = []
-        for x, y in self.__get_moves(moves=moves):
+        for x, y in self._get_moves(moves=moves):
             move = (x, y, tile)
-            max_move, max_score = self.__search(
+            max_move, max_score = self.search(
                 depth=depth-1,
                 moves=moves + [move],
-                tile=self.__next_tile(tile=tile)
+                tile=self._next_tile(tile=tile)
             )
             max_nexts.append((move, max_score))
 
         tile_index = self.order.index(tile)
 
         if len(max_nexts) == 0:
-            return self.__random_move(moves=moves), [0] * len(self.order)
+            return self._random_move(moves=moves), [0] * len(self.order)
 
-        max_move, max_score = max(max_nexts, key=lambda move_score: self.__get_tile_score(score=move_score[1], index=tile_index))
-
-        # print("Depth:", self.max_depth - depth)
-        # print("Score:", max_score)
-        # self.__print_board(moves=moves + [max_move], depth=self.max_depth - depth + 1)
+        max_move, max_score = max(max_nexts, key=lambda move_score: self._get_tile_score(score=move_score[1], index=tile_index))
 
         return (max_move, max_score)
 
-    def next_move(self, packet: PlayPacket) -> MovePacket:
-        self.start_time = time.time()
-        self.blocks = set(packet.blocks)
-        self.order = packet.order
-        self.node_times = []
-        self.depth_counts = [0] * self.max_depth
-
-        move, score = self.__search(
+    def run(self, packet: PlayPacket) -> MovePacket:
+        move, score = self.search(
             depth=self.max_depth,
             moves=packet.moves,
             tile=self.tile
@@ -123,13 +119,74 @@ class MiniMax(Algorithm):
             )
         )
 
-class AlphaBeta(Algorithm):
-    def next_move(self, packet: PlayPacket) -> MovePacket:
-        return MovePacket(
-            move=(0, 0)
+class AlphaBeta(ClientAlgorithm):
+    def search(self, depth: int, moves: List[Tuple[int, int, Tile]], tile: Tile, bounds: List[Tuple[int, int]]) -> Tuple[Tuple[int, int], List[float], List[Tuple[int, int]]]:
+        start_time = time.time()
+        if depth == 0 or start_time > self.start_time + self.max_time:
+            score = self.get_score({
+                "moves": moves,
+                "depth": self.max_depth - depth,
+                "order": self.order,
+                "blocks": self.blocks
+            })
+            end_time = time.time()
+
+            self.node_times.append(end_time - start_time)
+            self.depth_counts[self.max_depth - depth - 1] += 1
+
+            return (None, score, list(zip(score, score)))
+
+        tile_index = self.order.index(tile)
+
+        next_bounds = bounds.copy()
+        max_nexts = []
+        for x, y in self._get_moves(moves=moves):
+            move = (x, y, tile)
+            max_move, max_score, iter_bounds = self.search(
+                depth=depth-1,
+                moves=moves + [move],
+                tile=self._next_tile(tile=tile),
+                bounds=next_bounds
+            )
+
+            for ti in range(len(self.order)):
+                if ti == tile_index:
+                    next_bounds[ti] = (max(next_bounds[ti][0], iter_bounds[ti][1]), next_bounds[ti][1])
+                else:
+                    next_bounds[ti] = (next_bounds[ti][0], min(next_bounds[ti][1], iter_bounds[ti][0]))
+
+            if next_bounds[ti][1] < next_bounds[ti][0]:
+                break
+
+            max_nexts.append((move, max_score))
+
+        if len(max_nexts) == 0:
+            return (self._random_move(moves=moves), [0] * len(self.order), [(float('-inf'), float('inf')) for _ in range(len(self.order))])
+
+        max_move, max_score = max(max_nexts, key=lambda move_score: self._get_tile_score(score=move_score[1], index=tile_index))
+
+        return (max_move, max_score, next_bounds)
+
+    def run(self, packet: PlayPacket) -> MovePacket:
+        move, score, _ = self.search(
+            depth=self.max_depth,
+            moves=packet.moves,
+            tile=self.tile,
+            bounds=[(float('-inf'), float('inf')) for _ in range(len(self.order))]
         )
 
-class Heuristic1(Heuristic):
+        print("Play:", move, "Score:", score)
+
+        return MovePacket(
+            move=(move[0], move[1]),
+            statistics=MoveStatistics(
+                node_times=self.node_times,
+                depth_counts=self.depth_counts,
+                average_recursive_depth=0
+            )
+        )
+
+class Heuristic2(Heuristic):
     def get_score(self, data: any) -> List[float]:
         moves: List[Tuple[int, int, Tile]] = data["moves"]
         blocks: Set[Tuple[int, int]] = data["blocks"]
@@ -169,6 +226,6 @@ class Heuristic1(Heuristic):
 
         return score
 
-class Heuristic2(Heuristic):
+class Heuristic1(Heuristic):
     def get_score(self, data: any) -> float:
-        return 0
+        return [random.random() for _ in range(len(data["order"]))]
