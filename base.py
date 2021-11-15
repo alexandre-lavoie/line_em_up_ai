@@ -66,7 +66,7 @@ class ClientAlgorithm(Algorithm, ABC):
         return self.run(packet)
 
 class MiniMax(ClientAlgorithm):
-    def search(self, depth: int, moves: List[Tuple[int, int, Tile]], tile: Tile) -> Tuple[Tuple[int, int], List[float]]:
+    def search(self, depth: int, moves: List[Tuple[int, int, Tile]], tile: Tile) -> Tuple[Tuple[int, int], List[float], float]:
         start_time = time.time()
         if depth == 0 or start_time > self.start_time + self.max_time:
             score = self.get_score({
@@ -80,29 +80,34 @@ class MiniMax(ClientAlgorithm):
             self.node_times.append(end_time - start_time)
             self.depth_counts[self.max_depth - depth - 1] += 1
 
-            return (None, score)
+            return (None, score, self.max_depth - depth)
 
+        next_moves_set = self._get_moves(moves=moves)
         max_nexts = []
-        for x, y in self._get_moves(moves=moves):
+        depth_ard = 0
+        for x, y in next_moves_set:
             move = (x, y, tile)
-            max_move, max_score = self.search(
+            max_move, max_score, ard = self.search(
                 depth=depth-1,
                 moves=moves + [move],
                 tile=self._next_tile(tile=tile)
             )
+            depth_ard += ard
             max_nexts.append((move, max_score))
 
         tile_index = self.order.index(tile)
 
         if len(max_nexts) == 0:
-            return self._random_move(moves=moves), [0] * len(self.order)
+            return self._random_move(moves=moves), [0] * len(self.order), self.max_depth - depth
+        else:
+            depth_ard /= len(next_moves_set)
 
         max_move, max_score = max(max_nexts, key=lambda move_score: self._get_tile_score(score=move_score[1], index=tile_index))
 
-        return (max_move, max_score)
+        return (max_move, max_score, depth_ard)
 
     def run(self, packet: PlayPacket) -> MovePacket:
-        move, score = self.search(
+        move, score, ard = self.search(
             depth=self.max_depth,
             moves=packet.moves,
             tile=self.tile
@@ -115,12 +120,12 @@ class MiniMax(ClientAlgorithm):
             statistics=MoveStatistics(
                 node_times=self.node_times,
                 depth_counts=self.depth_counts,
-                average_recursive_depth=0
+                average_recursive_depth=ard
             )
         )
 
 class AlphaBeta(ClientAlgorithm):
-    def search(self, depth: int, moves: List[Tuple[int, int, Tile]], tile: Tile, bounds: List[Tuple[int, int]]) -> Tuple[Tuple[int, int], List[float], List[Tuple[int, int]]]:
+    def search(self, depth: int, moves: List[Tuple[int, int, Tile]], tile: Tile, bounds: List[Tuple[int, int]]) -> Tuple[Tuple[int, int], List[float], List[Tuple[int, int]], float]:
         start_time = time.time()
         if depth == 0 or start_time > self.start_time + self.max_time:
             score = self.get_score({
@@ -134,20 +139,25 @@ class AlphaBeta(ClientAlgorithm):
             self.node_times.append(end_time - start_time)
             self.depth_counts[self.max_depth - depth - 1] += 1
 
-            return (None, score, list(zip(score, score)))
+            return (None, score, list(zip(score, score)), self.max_depth - depth)
 
         tile_index = self.order.index(tile)
 
         next_bounds = bounds.copy()
         max_nexts = []
+        depth_ard = 0
+        count = 0
         for x, y in self._get_moves(moves=moves):
             move = (x, y, tile)
-            max_move, max_score, iter_bounds = self.search(
+            max_move, max_score, iter_bounds, ard = self.search(
                 depth=depth-1,
                 moves=moves + [move],
                 tile=self._next_tile(tile=tile),
                 bounds=next_bounds
             )
+
+            count += 1
+            depth_ard += ard
 
             for ti in range(len(self.order)):
                 if ti == tile_index:
@@ -161,14 +171,16 @@ class AlphaBeta(ClientAlgorithm):
             max_nexts.append((move, max_score))
 
         if len(max_nexts) == 0:
-            return (self._random_move(moves=moves), [0] * len(self.order), [(float('-inf'), float('inf')) for _ in range(len(self.order))])
+            return (self._random_move(moves=moves), [0] * len(self.order), [(float('-inf'), float('inf')) for _ in range(len(self.order))], self.max_depth - depth)
+        else:
+            depth_ard /= count
 
         max_move, max_score = max(max_nexts, key=lambda move_score: self._get_tile_score(score=move_score[1], index=tile_index))
 
-        return (max_move, max_score, next_bounds)
+        return (max_move, max_score, next_bounds, depth_ard)
 
     def run(self, packet: PlayPacket) -> MovePacket:
-        move, score, _ = self.search(
+        move, score, _, ard = self.search(
             depth=self.max_depth,
             moves=packet.moves,
             tile=self.tile,
@@ -182,7 +194,7 @@ class AlphaBeta(ClientAlgorithm):
             statistics=MoveStatistics(
                 node_times=self.node_times,
                 depth_counts=self.depth_counts,
-                average_recursive_depth=0
+                average_recursive_depth=ard
             )
         )
 
@@ -195,10 +207,11 @@ class Heuristic2(Heuristic):
 
         invalid: Set[Tuple[int, int]] = set([(x, y) for x, y, _ in moves]) | blocks
 
+        offset = 2
         score = [0] * len(order)
-        for i, (x, y, tile) in enumerate(moves[-depth:]):
+        for i, (x, y, tile) in enumerate(moves[-depth-offset:]):
             tile_index = order.index(tile)
-            local_depth = self.max_depth - i + 1
+            local_depth = self.max_depth - i + 1 + offset
             local_score = 0
 
             for dx, dy in [(1, 0), (0, 1), (1, 1), (1, -1)]:
@@ -222,33 +235,29 @@ class Heuristic2(Heuristic):
 
                     local_score = max(local_score, min(self.line_up_size, line_count))
 
-            score[tile_index] += local_score ** local_depth
+            score[tile_index] = max(score[tile_index], local_score ** local_depth)
 
         return score
 
 class Heuristic1(Heuristic):
     def get_score(self, data: any) -> float:
         moves: List[Tuple[int, int, Tile]] = data["moves"]
-        blocks: Set[Tuple[int, int]] = data["blocks"]
         order: List[Tile] = data["order"]
-
-        closed = set([(x, y) for x, y, _ in moves])
 
         score = [0] * len(order)
         for x, y, tile in moves:
             tile_index = order.index(tile)
 
-            neighbors = 0
-            invalids = 0
-
-            for (dx, dy) in [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]:
+            neighbor_count = 0
+            for (dx, dy) in [(-1, 0), (0, -1), (0, 1), (1, 0)]:
                 ox, oy = x + dx, y + dy
 
                 if (ox, oy, tile) in moves:
-                    neighbors += 1
-                elif (ox, oy) in closed or (ox, oy) in blocks:
-                    invalids += 1
+                    neighbor_count += 1
 
-            score[tile_index] += (4 - neighbors) * neighbors - invalids + (8 - neighbors - invalids) * 2
+            if neighbor_count <= 2:
+                score[tile_index] += neighbor_count
+            else:
+                score[tile_index] += max(0, 4 - neighbor_count)
 
         return score
